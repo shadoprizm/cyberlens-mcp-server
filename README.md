@@ -52,7 +52,7 @@ Claude: I'll scan it for security issues first.
 After the first npm release, the recommended install path is:
 
 ```bash
-npx -y @cyberlens/mcp-server
+npx -y @shadoprizm/cyberlens-mcp-server
 ```
 
 Before that, or for local development and manual builds:
@@ -73,7 +73,7 @@ npm run build
   "mcpServers": {
     "cyberlens": {
       "command": "npx",
-      "args": ["-y", "@cyberlens/mcp-server"]
+      "args": ["-y", "@shadoprizm/cyberlens-mcp-server"]
     }
   }
 }
@@ -248,7 +248,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 
 This repository is prepared for npm + MCP Registry publication as:
 
-- npm package: `@cyberlens/mcp-server`
+- npm package: `@shadoprizm/cyberlens-mcp-server`
 - MCP server name: `io.github.shadoprizm/cyberlens-mcp-server`
 
 Typical release flow:

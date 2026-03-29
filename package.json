@@ -1,5 +1,5 @@
 {
-  "name": "@cyberlens/mcp-server",
+  "name": "@shadoprizm/cyberlens-mcp-server",
   "version": "1.0.0",
   "mcpName": "io.github.shadoprizm/cyberlens-mcp-server",
   "description": "Cyber Lens AI MCP Server - Security scanning for AI assistants, with native Open CLAW skill support",
