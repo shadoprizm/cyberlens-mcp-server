@@ -1,0 +1,52 @@
+{
+  "name": "@cyberlens/mcp-server",
+  "version": "1.0.0",
+  "description": "Cyber Lens AI MCP Server - Security scanning for AI assistants, with native Open CLAW skill support",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "cyberlens-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "node --test dist/**/*.test.js",
+    "lint": "eslint src/**/*.ts",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "security",
+    "vulnerability",
+    "scanner",
+    "cyberlens",
+    "claude",
+    "ai",
+    "openclaw",
+    "clawhub",
+    "agentic-coding",
+    "ai-security"
+  ],
+  "author": "Cyber Lens AI",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cyberlensai/mcp-server"
+  },
+  "bugs": {
+    "url": "https://github.com/cyberlensai/mcp-server/issues"
+  },
+  "homepage": "https://cyberlensai.com"
+}
