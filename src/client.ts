@@ -1,10 +1,10 @@
 /**
  * Cyber Lens AI API Client
  * REST API client using X-API-Key authentication.
- * Matches the CyberLens skill's api_client.py pattern.
+ * Matches the CyberLens skill's public scan API surface.
  */
 
-import { ScanClawSkillArgs, ScanWebsiteArgs, ScanRepositoryArgs, ListCVEAlertsArgs } from "./schemas.js";
+import { ScanWebsiteArgs, ScanRepositoryArgs } from "./schemas.js";
 
 const DEFAULT_API_BASE = "https://api.cyberlensai.com/functions/v1/public-api-scan";
 
@@ -22,6 +22,55 @@ function resolveApiBase(apiBase?: string): string {
     throw e;
   }
   return candidate.replace(/\/+$/, "");
+}
+
+function extractOverallScore(data: any): number {
+  return data.security_score ?? data.scores?.overall ?? 0;
+}
+
+function buildQuickSummary(data: any, score: number): string {
+  if (typeof data.summary === "string" && data.summary.trim()) {
+    return data.summary;
+  }
+
+  if (data.summary && typeof data.summary === "object") {
+    const summary = data.summary;
+    const parts = [
+      `${summary.total_tests ?? 0} tests run`,
+      `${summary.vulnerabilities_found ?? 0} finding(s)`,
+    ];
+
+    const severityParts = ["critical", "high", "medium", "low", "info"]
+      .filter((severity) => typeof summary[severity] === "number" && summary[severity] > 0)
+      .map((severity) => `${summary[severity]} ${severity}`);
+
+    if (severityParts.length > 0) {
+      parts.push(severityParts.join(", "));
+    }
+
+    return `Quick scan complete: ${parts.join(" | ")}. Overall score ${score}/100.`;
+  }
+
+  return `Security score is ${score}/100.`;
+}
+
+function extractQuickWins(data: any): string[] {
+  if (Array.isArray(data.quick_wins) && data.quick_wins.length > 0) {
+    return data.quick_wins.filter((value: unknown): value is string => typeof value === "string");
+  }
+
+  if (!Array.isArray(data.vulnerabilities)) {
+    return [];
+  }
+
+  const recommendations: string[] = [...new Set<string>(
+    data.vulnerabilities
+      .filter((finding: any) => !finding.passed && typeof finding.recommendation === "string")
+      .map((finding: any) => finding.recommendation.trim())
+      .filter((value: string) => value.length > 0)
+  )];
+
+  return recommendations.slice(0, 3);
 }
 
 export class CyberLensClient {
@@ -98,36 +147,6 @@ export class CyberLensClient {
     throw new Error("Scan timed out waiting for results.");
   }
 
-  async scanClawSkill(args: ScanClawSkillArgs): Promise<{
-    scan_id: string;
-    skill_name: string;
-    url: string;
-    status: string;
-    estimated_duration: string;
-    is_clawhub_certification: boolean;
-  }> {
-    const skillName = this.extractSkillName(args.skill_url);
-    const scanId = await this.startScan({
-      url: args.skill_url,
-    });
-
-    const durationMap: Record<string, string> = {
-      quick: "30 seconds",
-      standard: "2 minutes",
-      deep: "5 minutes",
-      clawhub_certification: "10 minutes (full audit)",
-    };
-
-    return {
-      scan_id: scanId,
-      skill_name: skillName,
-      url: args.skill_url,
-      status: "pending",
-      estimated_duration: durationMap[args.scan_mode] || "2 minutes",
-      is_clawhub_certification: args.scan_mode === "clawhub_certification",
-    };
-  }
-
   async scanWebsite(args: ScanWebsiteArgs): Promise<{
     scan_id: string;
     url: string;
@@ -136,6 +155,8 @@ export class CyberLensClient {
   }> {
     const scanId = await this.startScan({
       url: args.url,
+      scan_type: args.scan_type,
+      database_connection: args.database_connection,
     });
 
     return {
@@ -154,6 +175,9 @@ export class CyberLensClient {
   }> {
     const scanId = await this.startScan({
       url: args.repo_url,
+      repo_url: args.repo_url,
+      branch: args.branch,
+      depth: args.depth,
     });
 
     return {
@@ -187,6 +211,8 @@ export class CyberLensClient {
     const isClawSkill =
       data.target_type === "claw_skill" ||
       data.repository_provider === "zip" ||
+      data.url?.includes("convex.site") ||
+      data.url?.includes("clawhub.ai") ||
       data.website_url?.includes("convex.site") ||
       data.website_url?.includes("clawhub.ai");
 
@@ -204,7 +230,7 @@ export class CyberLensClient {
         .map((v: any) => ({
           severity: v.severity || "medium",
           title: v.testId || "Unknown Issue",
-          description: v.message || "",
+          description: v.details || v.message || "",
           cwe: v.cwe,
           recommendation: v.recommendation || "Review the finding and apply appropriate fixes.",
         }));
@@ -220,9 +246,9 @@ export class CyberLensClient {
 
     return {
       scan_id: scanId,
-      url: data.website_url || data.repository_url,
+      url: data.url || data.website_url || data.repository_url,
       status: data.scan_status || data.status,
-      security_score: data.security_score || 0,
+      security_score: extractOverallScore(data),
       findings,
       is_claw_skill: isClawSkill,
     };
@@ -239,7 +265,7 @@ export class CyberLensClient {
     const scanId = result.data.scan_id;
     const data = await this.pollScan(scanId);
 
-    const score = data.security_score || 0;
+    const score = extractOverallScore(data);
     const grade =
       score >= 90 ? "A" : score >= 80 ? "B" : score >= 70 ? "C" : score >= 60 ? "D" : "F";
 
@@ -247,147 +273,37 @@ export class CyberLensClient {
       url,
       score,
       grade,
-      summary: data.summary || `Security score is ${score}/100`,
-      quick_wins: data.quick_wins || [],
+      summary: buildQuickSummary(data, score),
+      quick_wins: extractQuickWins(data),
     };
   }
 
-  async getQuota(): Promise<any> {
+  async getQuota(): Promise<{
+    plan: string;
+    scans_used: number;
+    scans_limit: number;
+    scans_remaining: number;
+    website_scans_used?: number;
+    website_scans_limit?: number;
+    website_scans_remaining?: number;
+    repo_scans_used?: number;
+    repo_scans_limit?: number;
+    repo_scans_remaining?: number;
+    legacy_combined?: boolean;
+  }> {
     const result = await this.request("GET", "/quota");
-    return result.data;
-  }
-
-  async listCVEAlerts(args: ListCVEAlertsArgs): Promise<{
-    cves: Array<{
-      cve_id: string;
-      severity: string;
-      cvss_score: number;
-      description: string;
-      affected: string;
-      published: string;
-    }>;
-  }> {
-    const params: Record<string, string> = { days: String(args.days) };
-    if (args.technology) params.technology = args.technology;
-    if (args.severity !== "all") params.severity = args.severity;
-
-    const query = new URLSearchParams(params).toString();
-    const result = await this.request("GET", `/cve?${query}`);
-    const cves = result.data || [];
-
     return {
-      cves: cves.map((cve: any) => ({
-        cve_id: cve.cve_id,
-        severity: cve.severity,
-        cvss_score: cve.cvss_score || 0,
-        description: cve.description,
-        affected: cve.affected_packages || "Unknown",
-        published: cve.published_date,
-      })),
+      plan: result.data.plan || "unknown",
+      scans_used: result.data.scans_used || 0,
+      scans_limit: result.data.scans_limit || 0,
+      scans_remaining: result.data.scans_remaining || 0,
+      website_scans_used: result.data.website_scans_used,
+      website_scans_limit: result.data.website_scans_limit,
+      website_scans_remaining: result.data.website_scans_remaining,
+      repo_scans_used: result.data.repo_scans_used,
+      repo_scans_limit: result.data.repo_scans_limit,
+      repo_scans_remaining: result.data.repo_scans_remaining,
+      legacy_combined: result.data.legacy_combined,
     };
-  }
-
-  async getRemediationGuide(
-    cweId: string,
-    context?: string
-  ): Promise<{
-    cwe_id: string;
-    title: string;
-    description: string;
-    steps: string[];
-    code_example?: { before: string; after: string };
-    prevention: string[];
-  }> {
-    const params: Record<string, string> = { cwe_id: cweId };
-    if (context) params.context = context;
-
-    const query = new URLSearchParams(params).toString();
-    const result = await this.request("GET", `/remediation?${query}`);
-    const data = result.data;
-
-    if (!data) {
-      const isClawContext = context?.toLowerCase().includes("claw");
-      return {
-        cwe_id: cweId,
-        title: `Guidance for ${cweId}`,
-        description: `Security guidance for ${cweId}.${isClawContext ? " This is particularly important for CLAW skills that may process untrusted input." : ""}`,
-        steps: [
-          "Review the vulnerability details",
-          "Identify affected code or configuration",
-          "Apply recommended security controls",
-          "Test the fix thoroughly",
-          "Deploy to production",
-        ],
-        prevention: [
-          "Follow secure coding practices",
-          "Regular security training for developers",
-          "Implement security review processes",
-          ...(isClawContext ? ["Validate all inputs in CLAW skill handlers", "Use minimal permission scopes"] : []),
-        ],
-      };
-    }
-
-    return {
-      cwe_id: data.cwe_id || cweId,
-      title: data.title,
-      description: data.description,
-      steps: data.remediation_steps || [],
-      code_example: data.code_example,
-      prevention: data.prevention_tips || [],
-    };
-  }
-
-  async getScanTransparency(includeChangelog: boolean): Promise<{
-    version: string;
-    last_updated: string;
-    test_count: number;
-    categories: Array<{ name: string; count: number }>;
-    claw_specific_tests?: number;
-    recent_changes?: Array<{
-      date: string;
-      description: string;
-      cve_source?: string;
-    }>;
-  }> {
-    const params = new URLSearchParams({
-      include_changelog: String(includeChangelog),
-    });
-    const result = await this.request("GET", `/transparency?${params.toString()}`);
-    const data = result.data;
-
-    return {
-      version: data.version || "unknown",
-      last_updated: data.last_updated || new Date().toISOString(),
-      test_count: data.test_count || 0,
-      categories: data.categories || [],
-      claw_specific_tests: data.claw_specific_tests,
-      recent_changes: data.recent_changes,
-    };
-  }
-
-  // ---- Helper ----
-
-  private extractSkillName(url: string): string {
-    try {
-      const parsed = new URL(url);
-
-      if (parsed.hostname.includes("clawhub.ai")) {
-        const parts = parsed.pathname.split("/").filter(Boolean);
-        return parts.slice(0, 2).join("/") || "unknown-skill";
-      }
-
-      if (parsed.hostname.endsWith(".convex.site")) {
-        return parsed.searchParams.get("slug") || "claw-skill";
-      }
-
-      const match = parsed.pathname.match(/\/([^/]+)\/([^/]+)/);
-      if (match) {
-        return `${match[1]}/${match[2].replace(/\.git$/, "")}`;
-      }
-
-      return "claw-skill";
-    } catch {
-      return "claw-skill";
-    }
   }
 }

@@ -10,26 +10,30 @@ import {
 import { CyberLensClient } from "./client.js";
 import { loadApiKey, loadApiBaseUrl, runConnectFlow } from "./auth.js";
 import { scanClawSkill as localScanClawSkill, SkillScanResult } from "./skill-scanner.js";
+import { getLocalRemediationGuide } from "./remediation-guides.js";
+import { validateClawSkillManifest } from "./skill-validation.js";
+import { getLocalTransparencyReport } from "./transparency.js";
 import {
   ScanWebsiteArgs,
   ScanRepositoryArgs,
   ScanClawSkillArgs,
   GetScanResultsArgs,
   GetSecurityScoreArgs,
-  ListCVEAlertsArgs,
   GetRemediationGuideArgs,
   scanWebsiteSchema,
   scanRepositorySchema,
   scanClawSkillSchema,
   getScanResultsSchema,
   getSecurityScoreSchema,
-  listCVEAlertsSchema,
   getRemediationGuideSchema,
 } from "./schemas.js";
 
 // Cyber Lens AI MCP Server
 // Security scanning for AI assistants and agentic coding workflows
 // With native support for Open CLAW skills and CLAUDE Hub
+
+const SERVER_NAME = "cyberlens-security";
+const SERVER_VERSION = "1.0.0";
 
 function getClient(): CyberLensClient {
   const apiKey = loadApiKey();
@@ -51,7 +55,7 @@ const TOOLS: Tool[] = [
 Opens your browser to cyberlensai.com where you can sign up for free or log in.
 After authorizing, your API key is securely saved locally.
 
-Free accounts get 5 scans/month (2 website + 3 repo/skill). No credit card required.
+Free accounts get 5 scans/month. No credit card required.
 
 Use this tool first before running any scans. If you already have an API key,
 you can also set the CYBERLENS_API_KEY environment variable instead.`,
@@ -61,16 +65,30 @@ you can also set the CYBERLENS_API_KEY environment variable instead.`,
     },
   },
   {
+    name: "get_account_quota",
+    description: `Get your CyberLens account quota and remaining cloud scans.
+
+Returns:
+- Current plan name
+- Total scans used, limit, and remaining
+- Website scan usage
+- Repository or skill scan usage
+
+Use this to confirm your account is connected and check how many cloud scans remain.`,
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
     name: "scan_claw_skill",
     description: `Scan an Open CLAW skill or plugin from CLAUDE Hub before installation.
 
-Purpose-built for the agentic coding era - understands CLAW skill architecture,
+Runs locally in the MCP server and understands CLAW skill packaging,
 manifest permissions, and AI agent security models.
 
 Performs comprehensive security analysis on:
 - CLAUDE Hub skill/plugin download links
-- Open CLAW skill repositories
-- Agent workflow definitions
 - Skill manifest files
 - Embedded code and dependencies
 
@@ -88,20 +106,13 @@ Use this BEFORE installing any CLAW skill to ensure it's safe for your environme
 
 Examples:
 - CLAUDE Hub URL: https://clawhub.ai/username/skill-name
-- Direct skill repo: https://github.com/username/claw-skill
 - Plugin download: https://*.convex.site/api/v1/download?slug=skill-name`,
     inputSchema: {
       type: "object",
       properties: {
         skill_url: {
           type: "string",
-          description: "CLAUDE Hub skill URL, GitHub repo, or skill download link",
-        },
-        scan_mode: {
-          type: "string",
-          enum: ["quick", "standard", "deep", "clawhub_certification"],
-          description: "Scan depth: quick (30s), standard (2min), deep (5min), clawhub_certification (full audit for publishing)",
-          default: "standard",
+          description: "CLAUDE Hub skill URL or direct skill download link",
         },
       },
       required: ["skill_url"],
@@ -116,10 +127,10 @@ Performs comprehensive security testing including:
 - Security headers analysis (CSP, HSTS, X-Frame-Options, etc.)
 - XSS and injection vulnerability checks
 - Third-party script integrity verification
-- Library CVE detection (for paid tiers)
-- Dynamic rule execution from recent CVEs (for paid tiers)
+- Account-specific scan features supported by the live CyberLens API
 
-Returns a scan ID that can be used with get_scan_results to retrieve findings.`,
+Returns a scan ID that can be used with get_scan_results to retrieve findings.
+Optional scan profile fields are forwarded to the live CyberLens API when supported.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -162,7 +173,9 @@ Checks for:
 - Misconfigurations in CI/CD files
 - Dockerfile and docker-compose security
 
-Ideal for auditing code before deployment or evaluating third-party dependencies.`,
+Ideal for auditing code before deployment or evaluating third-party dependencies.
+The repository URL is required. Additional fields like branch and depth are forwarded
+to the live CyberLens API when supported.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -197,7 +210,7 @@ Returns:
 - CVE references where applicable
 - Remediation guidance links
 
-Use this after initiating a scan with scan_claw_skill, scan_website, or scan_repository.`,
+Use this after initiating a cloud scan with scan_website or scan_repository.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -238,38 +251,6 @@ Use this for a fast assessment when full vulnerability details aren't needed.`,
     },
   },
   {
-    name: "list_cve_alerts",
-    description: `Get recent CVE alerts relevant to your technology stack.
-
-Returns:
-- Recently published CVEs from the last 7-30 days
-- Severity ratings and CVSS scores
-- Affected technologies and versions
-- Available patches or workarounds
-
-Can be filtered by technology (e.g., 'react', 'postgresql', 'node')`,
-    inputSchema: {
-      type: "object",
-      properties: {
-        days: {
-          type: "number",
-          description: "Number of days to look back (default: 7, max: 30)",
-          default: 7,
-        },
-        technology: {
-          type: "string",
-          description: "Filter by technology (e.g., 'react', 'node', 'postgresql')",
-        },
-        severity: {
-          type: "string",
-          enum: ["all", "critical", "high", "medium", "low"],
-          description: "Minimum severity level",
-          default: "all",
-        },
-      },
-    },
-  },
-  {
     name: "get_remediation_guide",
     description: `Get detailed remediation guidance for a specific vulnerability or CWE.
 
@@ -280,7 +261,7 @@ Returns:
 - Testing procedures
 - Prevention strategies
 
-Use the CWE ID (e.g., 'CWE-79' for XSS) or vulnerability name.`,
+Uses a built-in local guide library, so it still works even when no cloud guidance endpoint is available.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -298,16 +279,15 @@ Use the CWE ID (e.g., 'CWE-79' for XSS) or vulnerability name.`,
   },
   {
     name: "get_scan_transparency",
-    description: `Get information about what security tests Cyber Lens AI runs.
+    description: `Get an honest transparency report for this MCP server.
 
 Returns:
-- Current scanner version
-- Complete test inventory/baseline
-- Recent changelog of new tests
-- CVE sources for dynamic rules
-- CLAW skill specific checks
+- Current MCP server version
+- Local check inventory and category counts
+- Which live cloud API endpoints this server actually uses
+- Recent changes to the MCP scan surface
 
-Use this to understand exactly what tests are performed during scans.`,
+Use this to understand exactly what this server checks locally and which cloud features are live.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -352,8 +332,8 @@ Use this before publishing a skill to CLAUDE Hub or for CI/CD validation.`,
 // Create MCP server
 const server = new Server(
   {
-    name: "cyberlens-security",
-    version: "1.0.0",
+    name: SERVER_NAME,
+    version: SERVER_VERSION,
   },
   {
     capabilities: {
@@ -380,6 +360,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: formatConnectSuccess(result.config_path),
+            },
+          ],
+        };
+      }
+
+      case "get_account_quota": {
+        const client = getClient();
+        const result = await client.getQuota();
+        return {
+          content: [
+            {
+              type: "text",
+              text: formatAccountQuota(result),
             },
           ],
         };
@@ -454,24 +447,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case "list_cve_alerts": {
-        const client = getClient();
-        const parsed = listCVEAlertsSchema.parse(args);
-        const result = await client.listCVEAlerts(parsed);
-        return {
-          content: [
-            {
-              type: "text",
-              text: formatCVEAlerts(result),
-            },
-          ],
-        };
-      }
-
       case "get_remediation_guide": {
-        const client = getClient();
         const parsed = getRemediationGuideSchema.parse(args);
-        const result = await client.getRemediationGuide(parsed.cwe_id, parsed.context);
+        const result = getLocalRemediationGuide(parsed.cwe_id, parsed.context);
         return {
           content: [
             {
@@ -483,9 +461,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "get_scan_transparency": {
-        const client = getClient();
         const parsed = args as { include_changelog?: boolean };
-        const result = await client.getScanTransparency(parsed.include_changelog ?? true);
+        const result = getLocalTransparencyReport({
+          version: SERVER_VERSION,
+          includeChangelog: parsed.include_changelog ?? true,
+        });
         return {
           content: [
             {
@@ -525,83 +505,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 });
-
-// CLAW Skill validation helper
-function validateClawSkillManifest(manifestJson: string, skillCode?: string): {
-  valid: boolean;
-  issues: Array<{ severity: string; message: string }>;
-  recommendations: string[];
-} {
-  const issues: Array<{ severity: string; message: string }> = [];
-  const recommendations: string[] = [];
-
-  try {
-    const manifest = JSON.parse(manifestJson);
-
-    if (!manifest.name) {
-      issues.push({ severity: "error", message: "Missing required field: name" });
-    }
-    if (!manifest.version) {
-      issues.push({ severity: "warning", message: "Missing recommended field: version" });
-    }
-    if (!manifest.description) {
-      issues.push({ severity: "warning", message: "Missing recommended field: description" });
-    }
-
-    if (manifest.permissions) {
-      const dangerousPermissions = ["fs:write", "network:all", "exec:shell", "env:all"];
-      manifest.permissions.forEach((perm: string) => {
-        if (dangerousPermissions.some((dp) => perm.includes(dp))) {
-          issues.push({
-            severity: "warning",
-            message: `Potentially dangerous permission requested: ${perm}. Ensure this is necessary.`,
-          });
-        }
-      });
-
-      if (manifest.permissions.length > 5) {
-        recommendations.push("Consider reducing permission scope - only request what's absolutely necessary");
-      }
-    }
-
-    if (manifest.external_apis) {
-      manifest.external_apis.forEach((api: string) => {
-        if (!api.startsWith("https://")) {
-          issues.push({
-            severity: "error",
-            message: `External API must use HTTPS: ${api}`,
-          });
-        }
-      });
-    }
-
-    if (skillCode) {
-      const dangerousPatterns = [
-        { pattern: /eval\s*\(/, name: "eval()" },
-        { pattern: /child_process/, name: "child_process" },
-        { pattern: /fs\.unlink|fs\.rmdir|fs\.rm/, name: "file deletion" },
-        { pattern: /fetch\s*\(\s*["']http:\/\//, name: "insecure HTTP request" },
-      ];
-
-      dangerousPatterns.forEach(({ pattern, name }) => {
-        if (pattern.test(skillCode)) {
-          issues.push({
-            severity: "warning",
-            message: `Potentially dangerous pattern found: ${name}`,
-          });
-        }
-      });
-    }
-  } catch {
-    issues.push({ severity: "error", message: "Invalid JSON in manifest" });
-  }
-
-  return {
-    valid: issues.filter((i) => i.severity === "error").length === 0,
-    issues,
-    recommendations,
-  };
-}
 
 // Formatting functions
 
@@ -654,43 +557,14 @@ function formatConnectSuccess(configPath: string): string {
 Your API key has been saved to: ${configPath}
 
 You can now use all scanning tools:
+  - get_account_quota: Check your plan and remaining scans
   - scan_website: Scan a website for security issues
   - scan_repository: Audit a GitHub/GitLab/Bitbucket repo
   - scan_claw_skill: Scan a CLAW skill before installing
   - get_security_score: Quick security rating
   - validate_claw_skill: Validate a skill manifest locally
 
-Free accounts include 5 scans/month (2 website + 3 repo/skill).`;
-}
-
-function formatClawSkillScanInitiated(result: {
-  scan_id: string;
-  skill_name: string;
-  status: string;
-  estimated_duration: string;
-  is_clawhub_certification: boolean;
-}): string {
-  const certBadge = result.is_clawhub_certification
-    ? "\nCERTIFICATION MODE: Full audit for CLAUDE Hub publishing"
-    : "";
-
-  return `CLAW Skill Scan Initiated
-
-Skill: ${result.skill_name}
-Scan ID: ${result.scan_id}
-Status: ${result.status}
-Estimated Duration: ${result.estimated_duration}${certBadge}
-
-Scanning for:
-  - Hardcoded secrets and API keys
-  - Vulnerable dependencies
-  - Unsafe code patterns (eval, child_process, etc.)
-  - Suspicious network requests
-  - File system access risks
-  - Permission scope issues
-  - Data exfiltration patterns
-
-Use get_scan_results with the scan_id to check progress and retrieve findings.`;
+Free accounts include 5 scans/month.`;
 }
 
 function formatScanInitiated(result: { scan_id: string; url: string; status: string; estimated_duration: string }): string {
@@ -720,6 +594,7 @@ function formatScanResults(result: {
 }): string {
   const scoreLabel = result.security_score >= 80 ? "PASS" : result.security_score >= 60 ? "WARN" : "FAIL";
   const clawBadge = result.is_claw_skill ? "\nCLAW Skill Scan Results\n" : "";
+  const normalizedStatus = result.status.toLowerCase();
 
   let output = `[${scoreLabel}] Security Scan Results for ${result.url}${clawBadge}
 
@@ -728,6 +603,15 @@ Status: ${result.status}
 Scan ID: ${result.scan_id}
 
 `;
+
+  if (normalizedStatus !== "completed") {
+    if (normalizedStatus === "failed") {
+      output += "The scan did not complete successfully. Review the target and try again.\n";
+    } else {
+      output += `The scan is still ${result.status}. Run get_scan_results again in a moment for the final findings.\n`;
+    }
+    return output;
+  }
 
   if (result.findings.length === 0) {
     output += "No vulnerabilities found!\n";
@@ -790,29 +674,34 @@ ${result.summary}
   return output;
 }
 
-function formatCVEAlerts(result: {
-  cves: Array<{
-    cve_id: string;
-    severity: string;
-    cvss_score: number;
-    description: string;
-    affected: string;
-    published: string;
-  }>;
+function formatAccountQuota(result: {
+  plan: string;
+  scans_used: number;
+  scans_limit: number;
+  scans_remaining: number;
+  website_scans_used?: number;
+  website_scans_limit?: number;
+  website_scans_remaining?: number;
+  repo_scans_used?: number;
+  repo_scans_limit?: number;
+  repo_scans_remaining?: number;
+  legacy_combined?: boolean;
 }): string {
-  if (result.cves.length === 0) {
-    return "No new CVE alerts in the specified timeframe.";
+  let output = `CyberLens Account Quota\n\n`;
+  output += `Plan: ${result.plan}\n`;
+  output += `Total Scans: ${result.scans_used}/${result.scans_limit} used (${result.scans_remaining} remaining)\n`;
+
+  if (typeof result.website_scans_limit === "number") {
+    output += `Website Scans: ${result.website_scans_used}/${result.website_scans_limit} used (${result.website_scans_remaining} remaining)\n`;
   }
 
-  let output = `Recent CVE Alerts (${result.cves.length} found)\n\n`;
+  if (typeof result.repo_scans_limit === "number") {
+    output += `Repository or Skill Scans: ${result.repo_scans_used}/${result.repo_scans_limit} used (${result.repo_scans_remaining} remaining)\n`;
+  }
 
-  result.cves.forEach((cve) => {
-    output += `${cve.cve_id}\n`;
-    output += `   Severity: ${cve.severity.toUpperCase()} (CVSS: ${cve.cvss_score})\n`;
-    output += `   Published: ${cve.published}\n`;
-    output += `   Affected: ${cve.affected}\n`;
-    output += `   ${cve.description}\n\n`;
-  });
+  if (typeof result.legacy_combined === "boolean") {
+    output += `Legacy Combined Quota: ${result.legacy_combined ? "Yes" : "No"}\n`;
+  }
 
   return output;
 }
@@ -861,6 +750,8 @@ function formatTransparencyReport(result: {
     description: string;
     cve_source?: string;
   }>;
+  cloud_endpoints: string[];
+  notes: string[];
 }): string {
   let output = `Cyber Lens AI Scanner Transparency Report\n\n`;
   output += `Version: ${result.version}\n`;
@@ -870,6 +761,20 @@ function formatTransparencyReport(result: {
   output += "Test Categories:\n";
   result.categories.forEach((cat) => {
     output += `  - ${cat.name}: ${cat.count} tests\n`;
+  });
+
+  if (result.claw_specific_tests) {
+    output += `\nCLAW-Specific Checks: ${result.claw_specific_tests}\n`;
+  }
+
+  output += "\nLive Cloud Endpoints Used:\n";
+  result.cloud_endpoints.forEach((endpoint) => {
+    output += `  - ${endpoint}\n`;
+  });
+
+  output += "\nNotes:\n";
+  result.notes.forEach((note) => {
+    output += `  - ${note}\n`;
   });
 
   if (result.recent_changes && result.recent_changes.length > 0) {

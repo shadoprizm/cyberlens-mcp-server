@@ -18,7 +18,7 @@ When connected to an AI assistant (Claude Desktop, VS Code, etc.), this MCP serv
 - **Scan a CLAW skill** before installing it -- the server downloads the skill package, extracts it, and analyses the actual source code for dangerous patterns, hardcoded secrets, and permission issues
 - **Scan a website** for security headers, SSL issues, XSS vulnerabilities, and misconfigurations
 - **Audit a repository** on GitHub, GitLab, or Bitbucket for secrets, vulnerable dependencies, and insecure code
-- **Check CVE alerts** relevant to your tech stack
+- **Check your remaining cloud scan quota** before kicking off a batch of scans
 - **Get remediation guidance** with step-by-step fix instructions and code examples
 
 ### Example Conversation
@@ -84,7 +84,7 @@ You: "Connect my CyberLens account"
 
 This opens your browser to [cyberlensai.com](https://cyberlensai.com) where you can sign up (free) or log in. Your API key is saved locally at `~/.cyberlens/mcp/config.json` and used for all future scans.
 
-**Free accounts** include 5 scans/month (2 website + 3 repo/skill). No credit card required.
+**Free accounts** include 5 scans/month. No credit card required.
 
 > You can also set the `CYBERLENS_API_KEY` environment variable in the MCP config instead of using the browser flow.
 
@@ -97,12 +97,13 @@ This opens your browser to [cyberlensai.com](https://cyberlensai.com) where you 
 | Tool | Description | Requires API Key |
 |------|-------------|:---:|
 | `connect_account` | Opens browser to sign up/log in and saves your API key locally | No |
+| `get_account_quota` | Shows your current plan and remaining website/repository scan quota | Yes |
 
 ### CLAW Skill Scanning
 
 | Tool | Description | Requires API Key |
 |------|-------------|:---:|
-| `scan_claw_skill` | Download and analyse a CLAW skill for security issues | No |
+| `scan_claw_skill` | Download and analyse a CLAW Hub or direct skill package for security issues | No |
 | `validate_claw_skill` | Validate a skill manifest against security best practices | No |
 
 ### Website & Repository Scanning
@@ -111,16 +112,15 @@ This opens your browser to [cyberlensai.com](https://cyberlensai.com) where you 
 |------|-------------|:---:|
 | `scan_website` | Comprehensive website security scan | Yes |
 | `scan_repository` | GitHub/GitLab/Bitbucket repository audit | Yes |
-| `get_scan_results` | Retrieve detailed findings from a completed scan | Yes |
+| `get_scan_results` | Retrieve detailed findings from a completed cloud scan | Yes |
 | `get_security_score` | Quick security rating (A-F grade) | Yes |
 
 ### Intelligence & Guidance
 
 | Tool | Description | Requires API Key |
 |------|-------------|:---:|
-| `list_cve_alerts` | Recent CVE alerts filtered by technology and severity | Yes |
-| `get_remediation_guide` | Step-by-step fix instructions for a CWE or vulnerability | Yes |
-| `get_scan_transparency` | What tests the scanner runs and recent changes | Yes |
+| `get_remediation_guide` | Built-in local remediation playbooks for common CWEs and vulnerability classes | No |
+| `get_scan_transparency` | Honest report of the MCP server's local checks and live cloud endpoints | No |
 
 ---
 
@@ -157,16 +157,20 @@ https://*.convex.site/api/v1/download?slug=x  --> Direct download
 src/
   index.ts          MCP server, tool handlers, output formatting
   auth.ts           Browser-based connect flow, config file management
-  client.ts         REST API client (X-API-Key auth, fetch-based)
+  client.ts         REST API client for live scan and quota endpoints
+  remediation-guides.ts  Local CWE and vulnerability remediation guidance
   schemas.ts        Zod input validation schemas
   skill-scanner.ts  Local CLAW skill analyser (download, extract, scan)
+  skill-validation.ts    Local CLAW manifest validation
+  transparency.ts        Local transparency report for scan coverage
 ```
 
 **Key design decisions:**
 
 - **No Supabase SDK** -- pure REST calls with `fetch` and `X-API-Key` header
+- **Truthful cloud surface** -- the MCP server only exposes cloud-backed tools that are supported by the live public API (`/scan`, `/scan/{id}`, `/quota`)
 - **Stdio transport** -- runs as a subprocess of the AI assistant, communicates via stdin/stdout
-- **Graceful without API key** -- skill scanning and manifest validation work locally; cloud features prompt you to connect
+- **Graceful without API key** -- skill scanning, manifest validation, remediation guidance, and transparency reporting work locally; cloud features prompt you to connect
 - **Browser-based auth** -- same secure connect flow as the CyberLens OpenClaw skill (CSRF-protected, short-lived exchange codes, HTTPS-only)
 
 ---
