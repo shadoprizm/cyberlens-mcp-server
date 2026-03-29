@@ -35,6 +35,10 @@ const RECENT_CHANGES = [
   },
   {
     date: "2026-03-29",
+    description: "Restored public repository scans after wiring the public API back into the live repository-scanner backend and verified end-to-end repo scan startup.",
+  },
+  {
+    date: "2026-03-29",
     description: "Updated transparency reporting to reflect the actual local checks and live cloud endpoints used by the MCP server.",
   },
 ];
@@ -47,7 +51,8 @@ const CLOUD_ENDPOINTS = [
 
 const NOTES = [
   "CLAW skill scanning and manifest validation run locally in the MCP server and do not require a CyberLens API key.",
-  "Website and repository scanning use the live CyberLens public scan API.",
+  "Website scanning uses the live CyberLens public scan API.",
+  "Repository scanning uses the live CyberLens public scan API and routes into the repository-scanner worker.",
   "The MCP server only exposes cloud-backed tools that are currently supported by the live backend.",
 ];
 

@@ -7,21 +7,17 @@ import {
   ListToolsRequestSchema,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { CyberLensClient } from "./client.js";
-import { loadApiKey, loadApiBaseUrl, runConnectFlow } from "./auth.js";
+import { buildUpgradeUrl, loadApiKey, openUpgradePage, runConnectFlow } from "./auth.js";
+import { getCloudClient, getExistingCloudClient } from "./cloud-client.js";
+import { CyberLensQuotaExceededError } from "./client.js";
 import { scanClawSkill as localScanClawSkill, SkillScanResult } from "./skill-scanner.js";
 import { getLocalRemediationGuide } from "./remediation-guides.js";
 import { validateClawSkillManifest } from "./skill-validation.js";
 import { getLocalTransparencyReport } from "./transparency.js";
+import { LocalWebsiteScanResult, scanWebsiteLocally } from "./website-scanner.js";
 import {
-  ScanWebsiteArgs,
-  ScanRepositoryArgs,
-  ScanClawSkillArgs,
-  GetScanResultsArgs,
-  GetSecurityScoreArgs,
-  GetRemediationGuideArgs,
-  scanWebsiteSchema,
   scanRepositorySchema,
+  scanWebsiteSchema,
   scanClawSkillSchema,
   getScanResultsSchema,
   getSecurityScoreSchema,
@@ -35,17 +31,6 @@ import {
 const SERVER_NAME = "cyberlens-security";
 const SERVER_VERSION = "1.0.0";
 
-function getClient(): CyberLensClient {
-  const apiKey = loadApiKey();
-  if (!apiKey) {
-    throw new Error(
-      "No CyberLens API key found. Use the connect_account tool to link your CyberLens account, " +
-        "or set the CYBERLENS_API_KEY environment variable."
-    );
-  }
-  return new CyberLensClient(apiKey, { apiBase: loadApiBaseUrl() || undefined });
-}
-
 // Define available tools
 const TOOLS: Tool[] = [
   {
@@ -57,8 +42,9 @@ After authorizing, your API key is securely saved locally.
 
 Free accounts get 5 scans/month. No credit card required.
 
-Use this tool first before running any scans. If you already have an API key,
-you can also set the CYBERLENS_API_KEY environment variable instead.`,
+If you already have an API key, you can also set the CYBERLENS_API_KEY
+environment variable instead. Cloud tools can also launch this flow
+automatically the first time repository or account-only tools need an account.`,
     inputSchema: {
       type: "object",
       properties: {},
@@ -74,7 +60,9 @@ Returns:
 - Website scan usage
 - Repository or skill scan usage
 
-Use this to confirm your account is connected and check how many cloud scans remain.`,
+Use this to confirm your account is connected and check how many cloud scans remain.
+If no account is connected yet, the MCP server will launch the CyberLens
+browser flow automatically before checking quota.`,
     inputSchema: {
       type: "object",
       properties: {},
@@ -120,17 +108,17 @@ Examples:
   },
   {
     name: "scan_website",
-    description: `Scan a website for security vulnerabilities using Cyber Lens AI.
+    description: `Scan a website for security vulnerabilities with a local quick mode and a full cloud mode.
 
-Performs comprehensive security testing including:
-- SSL/TLS certificate validation
-- Security headers analysis (CSP, HSTS, X-Frame-Options, etc.)
-- XSS and injection vulnerability checks
-- Third-party script integrity verification
-- Account-specific scan features supported by the live CyberLens API
+Without a connected account, the MCP server runs a local quick scan immediately.
+That local mode covers roughly 15 core checks such as HTTPS, security headers,
+basic form issues, inline scripts, and server disclosure.
 
-Returns a scan ID that can be used with get_scan_results to retrieve findings.
-Optional scan profile fields are forwarded to the live CyberLens API when supported.`,
+With a connected account, CyberLens starts the full cloud scan with 70+ checks.
+That path returns a scan ID you can use with get_scan_results.
+
+If cloud website quota is exhausted, CyberLens falls back to the local quick scan
+automatically and opens the upgrade page.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -141,7 +129,7 @@ Optional scan profile fields are forwarded to the live CyberLens API when suppor
         scan_type: {
           type: "string",
           enum: ["quick", "full", "database"],
-          description: "Type of scan: quick (basic checks), full (comprehensive), or database (includes DB security)",
+          description: "Cloud scan profile. Local mode always uses a quick scan and warns if full or database was requested.",
           default: "full",
         },
         database_connection: {
@@ -164,38 +152,41 @@ Optional scan profile fields are forwarded to the live CyberLens API when suppor
   },
   {
     name: "scan_repository",
-    description: `Scan a GitHub, GitLab, or Bitbucket repository for security issues.
+    description: `Scan a public repository for secrets, dependency risks, and suspicious code patterns.
+
+Uses the live CyberLens cloud repository scanner for:
+- Public GitHub, GitLab, and Bitbucket repositories
+- Supported CLAUDE Hub or direct ZIP download URLs
 
 Checks for:
-- Hardcoded secrets and API keys
+- Exposed secrets and credentials
 - Vulnerable dependencies
-- Insecure code patterns
-- Misconfigurations in CI/CD files
-- Dockerfile and docker-compose security
+- Suspicious or risky code behavior
+- Trust posture and repository hygiene signals
+- Artifact and package reputation issues
 
-Ideal for auditing code before deployment or evaluating third-party dependencies.
-The repository URL is required. Additional fields like branch and depth are forwarded
-to the live CyberLens API when supported.`,
+Returns a scan ID that can be used with get_scan_results to retrieve findings.
+If no account is connected yet, the MCP server will open the CyberLens
+browser flow automatically and then continue the scan.`,
     inputSchema: {
       type: "object",
       properties: {
-        repo_url: {
+        repository_url: {
           type: "string",
-          description: "Repository URL (e.g., https://github.com/owner/repo)",
-        },
-        branch: {
-          type: "string",
-          description: "Branch to scan (default: main)",
-          default: "main",
+          description: "The repository URL to scan (for example https://github.com/owner/repo)",
         },
         depth: {
           type: "string",
           enum: ["surface", "deep"],
-          description: "Scan depth: surface (quick) or deep (comprehensive)",
+          description: "Surface is faster. Deep runs a broader repository analysis.",
           default: "surface",
         },
+        branch: {
+          type: "string",
+          description: "Optional branch name to scan. Defaults to the repository's default branch.",
+        },
       },
-      required: ["repo_url"],
+      required: ["repository_url"],
     },
   },
   {
@@ -210,7 +201,10 @@ Returns:
 - CVE references where applicable
 - Remediation guidance links
 
-Use this after initiating a cloud scan with scan_website or scan_repository.`,
+Use this after initiating a full cloud scan with scan_website or scan_repository.
+Local quick website scans return findings immediately and do not produce a scan ID.
+If no account is connected yet, the MCP server will connect first and then
+retrieve the cloud scan result.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -230,7 +224,7 @@ Use this after initiating a cloud scan with scan_website or scan_repository.`,
   },
   {
     name: "get_security_score",
-    description: `Get a quick security rating for a website without running a full scan.
+    description: `Get a quick security rating for a website.
 
 Returns:
 - Overall security score (0-100)
@@ -238,7 +232,9 @@ Returns:
 - Key metrics summary
 - Quick wins for improvement
 
-Use this for a fast assessment when full vulnerability details aren't needed.`,
+Without an account, this uses the local quick website scanner.
+With an account, this uses the full CyberLens cloud path.
+If cloud website quota is exhausted, CyberLens falls back to the local quick score automatically.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -366,13 +362,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "get_account_quota": {
-        const client = getClient();
+        const context = await getCloudClient();
+        const client = context.client;
         const result = await client.getQuota();
         return {
           content: [
             {
               type: "text",
-              text: formatAccountQuota(result),
+              text: withAutoConnectNotice(formatAccountQuota(result), context),
             },
           ],
         };
@@ -392,59 +389,136 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "scan_website": {
-        const client = getClient();
         const parsed = scanWebsiteSchema.parse(args);
-        const result = await client.scanWebsite(parsed);
-        return {
-          content: [
-            {
-              type: "text",
-              text: formatScanInitiated(result),
-            },
-          ],
-        };
+
+        const existingContext = getExistingCloudClient();
+        if (!existingContext) {
+          const localResult = await scanWebsiteLocally(parsed.url, {
+            requestedScanType: parsed.scan_type,
+            databaseConnectionProvided: !!parsed.database_connection,
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatLocalWebsiteScan(localResult, "no_account"),
+              },
+            ],
+            isError: !!localResult.error,
+          };
+        }
+
+        const client = existingContext.client;
+        try {
+          const result = await client.scanWebsite(parsed);
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatScanInitiated(result),
+              },
+            ],
+          };
+        } catch (error) {
+          if (error instanceof CyberLensQuotaExceededError) {
+            const upgradeUrl = error.upgrade_url || buildUpgradeUrl(error.quota_type || "website");
+            openUpgradePage(upgradeUrl);
+            const localResult = await scanWebsiteLocally(parsed.url, {
+              requestedScanType: parsed.scan_type,
+              databaseConnectionProvided: !!parsed.database_connection,
+            });
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: formatLocalWebsiteScan(localResult, "quota_exhausted", error, upgradeUrl),
+                },
+              ],
+              isError: !!localResult.error,
+            };
+          }
+          throw error;
+        }
       }
 
       case "scan_repository": {
-        const client = getClient();
+        const context = await getCloudClient();
+        const client = context.client;
         const parsed = scanRepositorySchema.parse(args);
         const result = await client.scanRepository(parsed);
         return {
           content: [
             {
               type: "text",
-              text: formatScanInitiated(result),
+              text: withAutoConnectNotice(formatScanInitiated(result), context),
             },
           ],
         };
       }
 
       case "get_scan_results": {
-        const client = getClient();
+        const context = await getCloudClient();
+        const client = context.client;
         const parsed = getScanResultsSchema.parse(args);
         const result = await client.getScanResults(parsed.scan_id, parsed.severity_filter);
         return {
           content: [
             {
               type: "text",
-              text: formatScanResults(result),
+              text: withAutoConnectNotice(formatScanResults(result), context),
             },
           ],
         };
       }
 
       case "get_security_score": {
-        const client = getClient();
         const parsed = getSecurityScoreSchema.parse(args);
-        const result = await client.getSecurityScore(parsed.url);
-        return {
-          content: [
-            {
-              type: "text",
-              text: formatSecurityScore(result),
-            },
-          ],
-        };
+        const existingContext = getExistingCloudClient();
+        if (!existingContext) {
+          const localResult = await scanWebsiteLocally(parsed.url, {
+            requestedScanType: "quick",
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatLocalSecurityScore(localResult, "no_account"),
+              },
+            ],
+            isError: !!localResult.error,
+          };
+        }
+
+        const client = existingContext.client;
+        try {
+          const result = await client.getSecurityScore(parsed.url);
+          return {
+            content: [
+              {
+                type: "text",
+                text: formatSecurityScore(result),
+              },
+            ],
+          };
+        } catch (error) {
+          if (error instanceof CyberLensQuotaExceededError) {
+            const upgradeUrl = error.upgrade_url || buildUpgradeUrl(error.quota_type || "website");
+            openUpgradePage(upgradeUrl);
+            const localResult = await scanWebsiteLocally(parsed.url, {
+              requestedScanType: "quick",
+            });
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: formatLocalSecurityScore(localResult, "quota_exhausted", error, upgradeUrl),
+                },
+              ],
+              isError: !!localResult.error,
+            };
+          }
+          throw error;
+        }
       }
 
       case "get_remediation_guide": {
@@ -493,6 +567,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error) {
+    if (error instanceof CyberLensQuotaExceededError) {
+      const upgradeUrl = error.upgrade_url || buildUpgradeUrl(error.quota_type || "combined");
+      openUpgradePage(upgradeUrl);
+      return {
+        content: [
+          {
+            type: "text",
+            text: formatQuotaUpgradePrompt(error, upgradeUrl),
+          },
+        ],
+        isError: true,
+      };
+    }
+
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       content: [
@@ -558,24 +646,73 @@ Your API key has been saved to: ${configPath}
 
 You can now use all scanning tools:
   - get_account_quota: Check your plan and remaining scans
-  - scan_website: Scan a website for security issues
-  - scan_repository: Audit a GitHub/GitLab/Bitbucket repo
+  - scan_website: Upgrade website scans from the local quick mode to the full cloud scan
+  - scan_repository: Scan a public repository for security issues
   - scan_claw_skill: Scan a CLAW skill before installing
-  - get_security_score: Quick security rating
+  - get_security_score: Upgrade quick website scores to the full cloud score flow
   - validate_claw_skill: Validate a skill manifest locally
 
 Free accounts include 5 scans/month.`;
 }
 
+function withAutoConnectNotice(
+  text: string,
+  context: { connected_now: boolean; config_path?: string }
+): string {
+  if (!context.connected_now) {
+    return text;
+  }
+
+  const configLine = context.config_path
+    ? `API key saved to: ${context.config_path}`
+    : "API key saved locally for future scans.";
+
+  return `Connected to CyberLens AI automatically.
+${configLine}
+
+${text}`;
+}
+
 function formatScanInitiated(result: { scan_id: string; url: string; status: string; estimated_duration: string }): string {
-  return `Security Scan Initiated
+  return `Full Cloud Scan Initiated
 
 Target: ${result.url}
+Mode: Full Cloud Scan (70+ checks)
 Scan ID: ${result.scan_id}
 Status: ${result.status}
 Estimated Duration: ${result.estimated_duration}
 
 The scan is now running. Use get_scan_results with the scan_id to check progress and retrieve findings.`;
+}
+
+function formatQuotaUpgradePrompt(
+  error: {
+    message: string;
+    quota_type?: "website" | "repository" | "combined";
+    used?: number;
+    limit?: number;
+  },
+  upgradeUrl: string
+): string {
+  const quotaLabel =
+    error.quota_type === "repository"
+      ? "repository scans"
+      : error.quota_type === "website"
+        ? "website scans"
+        : "cloud scans";
+  const usageLine =
+    typeof error.used === "number" && typeof error.limit === "number"
+      ? `Usage: ${error.used}/${error.limit}\n`
+      : "";
+
+  return `Upgrade Required
+
+${error.message}
+${usageLine}CyberLens opened the pricing page in your browser.
+If it did not open automatically, use this link:
+${upgradeUrl}
+
+Upgrade to continue ${quotaLabel} immediately, or wait until the next monthly reset.`;
 }
 
 function formatScanResults(result: {
@@ -674,6 +811,143 @@ ${result.summary}
   return output;
 }
 
+function formatLocalWebsiteScan(
+  result: LocalWebsiteScanResult,
+  reason: "no_account" | "quota_exhausted",
+  quotaError?: {
+    message: string;
+    used?: number;
+    limit?: number;
+  },
+  upgradeUrl?: string
+): string {
+  if (result.error) {
+    return `Local Quick Website Scan Failed
+
+Target: ${result.url}
+Mode: Local Quick Scan (~15 core checks)
+Error: ${result.error}
+
+${result.warnings.join("\n")}`;
+  }
+
+  const scoreLabel = result.score >= 80 ? "PASS" : result.score >= 60 ? "WARN" : "FAIL";
+  let output = `[${scoreLabel}] Local Quick Website Scan for ${result.url}
+
+Mode: Local Quick Scan (~15 core checks)
+Requested Scan Mode: ${result.requested_scan_type}
+Effective Scan Mode: ${result.effective_scan_type}
+Security Score: ${result.score}/100
+Grade: ${result.grade}
+Scan Time: ${result.scan_time_ms}ms
+`;
+
+  if (reason === "no_account") {
+    output += `
+No CyberLens account is connected, so this website scan ran locally.
+Connect your account to unlock the full cloud scan with 70+ checks, scan history, and AI analysis.
+`;
+  } else {
+    const usageLine =
+      typeof quotaError?.used === "number" && typeof quotaError?.limit === "number"
+        ? `Cloud website quota: ${quotaError.used}/${quotaError.limit}\n`
+        : "";
+    output += `
+Cloud website quota is exhausted, so CyberLens ran the local quick scan instead.
+${usageLine}CyberLens opened the pricing page in your browser.
+Upgrade URL: ${upgradeUrl}
+`;
+  }
+
+  if (result.warnings.length > 0) {
+    output += `\nNotes:\n`;
+    result.warnings.forEach((warning) => {
+      output += `  - ${warning}\n`;
+    });
+  }
+
+  if (result.technologies.length > 0) {
+    output += `\nTechnologies: ${result.technologies.join(", ")}\n`;
+  }
+
+  if (result.findings.length === 0) {
+    output += `\nNo issues found in the local quick scan.\n`;
+    return output;
+  }
+
+  output += `\nFound ${result.findings.length} issue(s):\n\n`;
+  const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const sorted = [...result.findings].sort(
+    (a, b) =>
+      severityOrder[a.severity as keyof typeof severityOrder] -
+      severityOrder[b.severity as keyof typeof severityOrder]
+  );
+
+  sorted.forEach((finding, index) => {
+    output += `${index + 1}. [${finding.severity.toUpperCase()}] ${finding.type}\n`;
+    output += `   ${finding.description}\n`;
+    if (finding.evidence) {
+      output += `   Evidence: ${finding.evidence}\n`;
+    }
+    output += `   Fix: ${finding.recommendation}\n\n`;
+  });
+
+  return output;
+}
+
+function formatLocalSecurityScore(
+  result: LocalWebsiteScanResult,
+  reason: "no_account" | "quota_exhausted",
+  quotaError?: {
+    message: string;
+    used?: number;
+    limit?: number;
+  },
+  upgradeUrl?: string
+): string {
+  if (result.error) {
+    return `Local Quick Security Score Failed
+
+Target: ${result.url}
+Mode: Local Quick Scan (~15 core checks)
+Error: ${result.error}
+`;
+  }
+
+  let output = `Quick Security Assessment for ${result.url}
+
+Mode: Local Quick Scan (~15 core checks)
+Score: ${result.score}/100
+Grade: ${result.grade}
+`;
+
+  if (reason === "no_account") {
+    output += `
+No CyberLens account is connected, so this score came from the local quick website scan.
+Connect your account for the full cloud scan with 70+ checks, scan history, and AI analysis.
+`;
+  } else {
+    const usageLine =
+      typeof quotaError?.used === "number" && typeof quotaError?.limit === "number"
+        ? `Cloud website quota: ${quotaError.used}/${quotaError.limit}\n`
+        : "";
+    output += `
+Cloud website quota is exhausted, so CyberLens generated this score from the local quick scan instead.
+${usageLine}CyberLens opened the pricing page in your browser.
+Upgrade URL: ${upgradeUrl}
+`;
+  }
+
+  if (result.warnings.length > 0) {
+    output += `\nNotes:\n`;
+    result.warnings.forEach((warning) => {
+      output += `  - ${warning}\n`;
+    });
+  }
+
+  return output;
+}
+
 function formatAccountQuota(result: {
   plan: string;
   scans_used: number;
@@ -686,6 +960,12 @@ function formatAccountQuota(result: {
   repo_scans_limit?: number;
   repo_scans_remaining?: number;
   legacy_combined?: boolean;
+  upgrade_recommended?: boolean;
+  upgrade_url?: string;
+  website_upgrade_required?: boolean;
+  website_upgrade_url?: string;
+  repo_upgrade_required?: boolean;
+  repo_upgrade_url?: string;
 }): string {
   let output = `CyberLens Account Quota\n\n`;
   output += `Plan: ${result.plan}\n`;
@@ -701,6 +981,19 @@ function formatAccountQuota(result: {
 
   if (typeof result.legacy_combined === "boolean") {
     output += `Legacy Combined Quota: ${result.legacy_combined ? "Yes" : "No"}\n`;
+  }
+
+  const quotaWarnings: string[] = [];
+  if (result.website_upgrade_required) {
+    quotaWarnings.push("Website scan quota exhausted");
+  }
+  if (result.repo_upgrade_required) {
+    quotaWarnings.push("Repository scan quota exhausted");
+  }
+
+  if (quotaWarnings.length > 0) {
+    output += `\nUpgrade Recommended: ${quotaWarnings.join("; ")}\n`;
+    output += `Upgrade URL: ${result.upgrade_url || buildUpgradeUrl("combined")}\n`;
   }
 
   return output;
@@ -831,7 +1124,7 @@ async function main() {
   if (hasKey) {
     console.error("API key loaded - ready to scan");
   } else {
-    console.error("No API key found - use connect_account tool to get started");
+    console.error("No API key found - website tools will use the local quick scan until you connect a CyberLens account");
   }
 }
 

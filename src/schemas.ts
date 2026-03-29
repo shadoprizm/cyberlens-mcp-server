@@ -17,9 +17,9 @@ export const scanWebsiteSchema = z.object({
 });
 
 export const scanRepositorySchema = z.object({
-  repo_url: z.string().url().describe("Repository URL (GitHub, GitLab, or Bitbucket)"),
-  branch: z.string().optional().default("main"),
+  repository_url: z.string().url().describe("The repository URL to scan"),
   depth: z.enum(["surface", "deep"]).optional().default("surface"),
+  branch: z.string().optional().describe("Optional branch name to scan"),
 });
 
 export const getScanResultsSchema = z.object({

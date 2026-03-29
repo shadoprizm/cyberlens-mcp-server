@@ -1,9 +1,11 @@
 {
   "name": "@cyberlens/mcp-server",
   "version": "1.0.0",
+  "mcpName": "io.github.shadoprizm/cyberlens-mcp-server",
   "description": "Cyber Lens AI MCP Server - Security scanning for AI assistants, with native Open CLAW skill support",
   "files": [
     "dist",
+    "server.json",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
@@ -19,7 +21,8 @@
     "start": "node dist/index.js",
     "test": "node --test dist/**/*.test.js",
     "lint": "eslint src/**/*.ts",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
     "mcp",
@@ -54,5 +57,8 @@
   "bugs": {
     "url": "https://github.com/shadoprizm/cyberlens-mcp-server/issues"
   },
-  "homepage": "https://cyberlensai.com"
+  "homepage": "https://cyberlensai.com",
+  "publishConfig": {
+    "access": "public"
+  }
 }

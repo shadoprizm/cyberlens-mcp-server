@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933)](https://nodejs.org)
 
-A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that gives AI assistants the ability to scan code, websites, and repositories for security vulnerabilities. It's purpose-built for the agentic coding era, with native support for scanning [Open CLAW](https://openclaw.ai) skills before you install them.
+A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that gives AI assistants the ability to scan websites, public repositories, and [Open CLAW](https://openclaw.ai) skills for security vulnerabilities. It's purpose-built for the agentic coding era, with native support for scanning skill packages before you install them.
 
 ---
 
@@ -16,8 +16,8 @@ A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that gi
 When connected to an AI assistant (Claude Desktop, VS Code, etc.), this MCP server adds security scanning tools that the assistant can use during your conversation:
 
 - **Scan a CLAW skill** before installing it -- the server downloads the skill package, extracts it, and analyses the actual source code for dangerous patterns, hardcoded secrets, and permission issues
-- **Scan a website** for security headers, SSL issues, XSS vulnerabilities, and misconfigurations
-- **Audit a repository** on GitHub, GitLab, or Bitbucket for secrets, vulnerable dependencies, and insecure code
+- **Scan a website** in a local quick mode without an account, or use the full cloud scan when connected
+- **Scan a public repository** for exposed secrets, dependency vulnerabilities, suspicious code patterns, and trust posture issues
 - **Check your remaining cloud scan quota** before kicking off a batch of scans
 - **Get remediation guidance** with step-by-step fix instructions and code examples
 
@@ -49,15 +49,37 @@ Claude: I'll scan it for security issues first.
 
 ### 1. Install
 
+After the first npm release, the recommended install path is:
+
+```bash
+npx -y @cyberlens/mcp-server
+```
+
+Before that, or for local development and manual builds:
+
 ```bash
 git clone https://github.com/shadoprizm/cyberlens-mcp-server.git
 cd cyberlens-mcp-server
 npm install
+npm run build
 ```
 
 ### 2. Add to Your AI Assistant
 
 **Claude Desktop** -- add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "cyberlens": {
+      "command": "npx",
+      "args": ["-y", "@cyberlens/mcp-server"]
+    }
+  }
+}
+```
+
+If you are running from a source checkout instead of npm:
 
 ```json
 {
@@ -76,7 +98,19 @@ npm install
 
 ### 3. Connect Your Account
 
-On first use, ask your AI assistant to connect your CyberLens account:
+Website tools work immediately without an account in local quick mode. That local mode covers roughly 15 core checks and returns results right away.
+
+Connecting an account upgrades website scans to the full CyberLens cloud path with 70+ checks, scan history, and AI analysis. Repository and account-only tools still connect through the browser flow when needed.
+
+When a repository or account-only tool needs an account, the MCP server:
+
+1. opens the CyberLens browser flow automatically
+2. sends the user to `cyberlensai.com` to sign up or log in
+3. receives the secure callback locally
+4. saves the API key to `~/.cyberlens/mcp/config.json`
+5. continues the original tool call automatically
+
+You can also trigger the same flow explicitly:
 
 ```
 You: "Connect my CyberLens account"
@@ -88,6 +122,8 @@ This opens your browser to [cyberlensai.com](https://cyberlensai.com) where you 
 
 > You can also set the `CYBERLENS_API_KEY` environment variable in the MCP config instead of using the browser flow.
 
+If a cloud website scan hits its monthly quota, the MCP server opens the CyberLens pricing page automatically and falls back to the local quick scan instead of hard-failing. Repository scans still require cloud quota.
+
 ---
 
 ## Available Tools
@@ -97,7 +133,7 @@ This opens your browser to [cyberlensai.com](https://cyberlensai.com) where you 
 | Tool | Description | Requires API Key |
 |------|-------------|:---:|
 | `connect_account` | Opens browser to sign up/log in and saves your API key locally | No |
-| `get_account_quota` | Shows your current plan and remaining website/repository scan quota | Yes |
+| `get_account_quota` | Shows your current plan and remaining website/repository scan quota; auto-connects on first use if needed | Yes |
 
 ### CLAW Skill Scanning
 
@@ -110,10 +146,10 @@ This opens your browser to [cyberlensai.com](https://cyberlensai.com) where you 
 
 | Tool | Description | Requires API Key |
 |------|-------------|:---:|
-| `scan_website` | Comprehensive website security scan | Yes |
-| `scan_repository` | GitHub/GitLab/Bitbucket repository audit | Yes |
-| `get_scan_results` | Retrieve detailed findings from a completed cloud scan | Yes |
-| `get_security_score` | Quick security rating (A-F grade) | Yes |
+| `scan_website` | Local quick website scan without an account; full cloud scan when connected; local fallback if website cloud quota is exhausted | No for local, Yes for full cloud |
+| `scan_repository` | Public repository security scan for GitHub, GitLab, Bitbucket, and supported ZIP targets; auto-connects on first use if needed | Yes |
+| `get_scan_results` | Retrieve detailed findings from a completed cloud scan; auto-connects on first use if needed | Yes |
+| `get_security_score` | Local quick website score without an account; full cloud score when connected | No for local, Yes for full cloud |
 
 ### Intelligence & Guidance
 
@@ -140,6 +176,17 @@ When you provide a CLAW skill URL, the MCP server:
 5. **Cleans up** all temporary files
 
 This entire process runs locally -- no API key is required and your code is never sent to an external server.
+
+## Website Scan Modes
+
+`scan_website` and `get_security_score` now have two honest modes:
+
+- **Local Quick Scan** -- works without an account, returns immediately, and covers roughly 15 core website checks such as HTTPS, security headers, server disclosure, insecure forms, and inline-script indicators
+- **Full Cloud Scan** -- requires a connected CyberLens account, runs 70+ checks, keeps cloud scan history, and includes richer analysis
+
+If a user asks for a `full` or `database` website scan without an account, the MCP server still returns the local quick scan and says that the requested cloud-only mode was not available.
+
+If a connected user runs out of website cloud quota, CyberLens falls back to the local quick scan automatically and opens the pricing page with an upgrade link.
 
 ### Accepted URL Formats
 
@@ -170,7 +217,7 @@ src/
 - **No Supabase SDK** -- pure REST calls with `fetch` and `X-API-Key` header
 - **Truthful cloud surface** -- the MCP server only exposes cloud-backed tools that are supported by the live public API (`/scan`, `/scan/{id}`, `/quota`)
 - **Stdio transport** -- runs as a subprocess of the AI assistant, communicates via stdin/stdout
-- **Graceful without API key** -- skill scanning, manifest validation, remediation guidance, and transparency reporting work locally; cloud features prompt you to connect
+- **Useful without API key** -- skill scanning, website quick scans, manifest validation, remediation guidance, and transparency reporting work locally; connecting an account upgrades website scans to the full cloud path and unlocks repository scanning
 - **Browser-based auth** -- same secure connect flow as the CyberLens OpenClaw skill (CSRF-protected, short-lived exchange codes, HTTPS-only)
 
 ---
@@ -194,6 +241,33 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 |----------|:---:|---------|-------------|
 | `CYBERLENS_API_KEY` | No | -- | API key (alternative to browser connect flow) |
 | `CYBERLENS_API_BASE_URL` | No | `https://api.cyberlensai.com/functions/v1/public-api-scan` | API endpoint override |
+
+---
+
+## Publishing
+
+This repository is prepared for npm + MCP Registry publication as:
+
+- npm package: `@cyberlens/mcp-server`
+- MCP server name: `io.github.shadoprizm/cyberlens-mcp-server`
+
+Typical release flow:
+
+```bash
+# 1. Bump the version
+npm version patch
+
+# 2. Publish the package to npm
+npm publish
+
+# 3. Authenticate with the MCP Registry
+mcp-publisher login github
+
+# 4. Publish server.json to the MCP Registry
+mcp-publisher publish
+```
+
+The registry metadata lives in the root `server.json` file and the npm ownership check uses the `mcpName` field in `package.json`.
 
 ---
 

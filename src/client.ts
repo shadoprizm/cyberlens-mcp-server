@@ -4,9 +4,34 @@
  * Matches the CyberLens skill's public scan API surface.
  */
 
-import { ScanWebsiteArgs, ScanRepositoryArgs } from "./schemas.js";
+import { ScanRepositoryArgs, ScanWebsiteArgs } from "./schemas.js";
 
 const DEFAULT_API_BASE = "https://api.cyberlensai.com/functions/v1/public-api-scan";
+
+export class CyberLensQuotaExceededError extends Error {
+  readonly code = "QUOTA_EXCEEDED";
+  readonly upgrade_url?: string;
+  readonly quota_type?: "website" | "repository" | "combined";
+  readonly used?: number;
+  readonly limit?: number;
+
+  constructor(
+    message: string,
+    options?: {
+      upgrade_url?: string;
+      quota_type?: "website" | "repository" | "combined";
+      used?: number;
+      limit?: number;
+    }
+  ) {
+    super(message);
+    this.name = "CyberLensQuotaExceededError";
+    this.upgrade_url = options?.upgrade_url;
+    this.quota_type = options?.quota_type;
+    this.used = options?.used;
+    this.limit = options?.limit;
+  }
+}
 
 function resolveApiBase(apiBase?: string): string {
   const candidate = (apiBase || process.env.CYBERLENS_API_BASE_URL || DEFAULT_API_BASE).trim();
@@ -73,6 +98,116 @@ function extractQuickWins(data: any): string[] {
   return recommendations.slice(0, 3);
 }
 
+type NormalizedFinding = {
+  severity: string;
+  title: string;
+  description: string;
+  cwe?: string;
+  recommendation: string;
+};
+
+function normalizeWebsiteFindings(data: any): NormalizedFinding[] {
+  if (!Array.isArray(data.vulnerabilities)) {
+    return [];
+  }
+
+  return data.vulnerabilities
+    .filter((finding: any) => !finding.passed)
+    .map((finding: any) => ({
+      severity: finding.severity || "medium",
+      title: finding.testId || "Unknown Issue",
+      description: finding.details || finding.message || "",
+      cwe: finding.cwe,
+      recommendation: finding.recommendation || "Review the finding and apply appropriate fixes.",
+    }));
+}
+
+function normalizeRepositoryFindings(data: any): NormalizedFinding[] {
+  const findings: NormalizedFinding[] = [];
+
+  if (Array.isArray(data.security_findings)) {
+    findings.push(
+      ...data.security_findings
+        .filter((finding: any) => finding.passed !== true)
+        .map((finding: any) => ({
+          severity: finding.severity || "medium",
+          title: finding.testId || finding.title || finding.message || "Repository Finding",
+          description: finding.details || finding.message || "",
+          cwe: Array.isArray(finding.cve) ? finding.cve[0] : finding.cve,
+          recommendation: finding.recommendation || "Review the finding and apply appropriate fixes.",
+        }))
+    );
+  }
+
+  if (Array.isArray(data.dependency_vulnerabilities)) {
+    findings.push(
+      ...data.dependency_vulnerabilities.map((finding: any) => ({
+        severity: finding.severity || "medium",
+        title: finding.package_name
+          ? `Dependency vulnerability: ${finding.package_name}@${finding.current_version || "unknown"}`
+          : "Dependency vulnerability",
+        description: finding.remediation || finding.description || "A vulnerable dependency was detected.",
+        cwe: Array.isArray(finding.cve_ids) ? finding.cve_ids[0] : undefined,
+        recommendation: finding.remediation || "Upgrade or replace the affected dependency.",
+      }))
+    );
+  }
+
+  if (Array.isArray(data.trust_posture_findings)) {
+    findings.push(
+      ...data.trust_posture_findings.map((finding: any) => ({
+        severity: finding.severity || "medium",
+        title: finding.title || finding.type || "Trust posture issue",
+        description: finding.message || finding.details || "",
+        recommendation: finding.remediation || finding.recommendation || "Review the repository trust posture finding.",
+      }))
+    );
+  }
+
+  if (Array.isArray(data.behavioral_findings)) {
+    findings.push(
+      ...data.behavioral_findings.map((finding: any) => ({
+        severity: finding.severity || "medium",
+        title: finding.title || finding.type || "Suspicious behavior",
+        description: finding.message || finding.details || "",
+        recommendation: finding.remediation || finding.recommendation || "Review the suspicious behavior finding.",
+      }))
+    );
+  }
+
+  if (Array.isArray(data.malicious_package_findings)) {
+    findings.push(
+      ...data.malicious_package_findings.map((finding: any) => ({
+        severity: finding.severity || "high",
+        title: finding.title || finding.package_name || "Malicious package finding",
+        description: finding.message || finding.details || "",
+        recommendation: finding.remediation || finding.recommendation || "Remove or replace the flagged package.",
+      }))
+    );
+  }
+
+  if (Array.isArray(data.artifact_findings)) {
+    findings.push(
+      ...data.artifact_findings.map((finding: any) => ({
+        severity: finding.severity || "medium",
+        title: finding.title || finding.type || "Artifact risk finding",
+        description: finding.message || finding.details || "",
+        recommendation: finding.remediation || finding.recommendation || "Review the flagged artifact.",
+      }))
+    );
+  }
+
+  return findings;
+}
+
+function extractScanFindings(data: any): NormalizedFinding[] {
+  if (Array.isArray(data.vulnerabilities)) {
+    return normalizeWebsiteFindings(data);
+  }
+
+  return normalizeRepositoryFindings(data);
+}
+
 export class CyberLensClient {
   private apiKey: string;
   private apiBase: string;
@@ -103,13 +238,24 @@ export class CyberLensClient {
       if (!response.ok) {
         const text = await response.text().catch(() => "");
         let message = `CyberLens API error (${response.status})`;
+        let parsed: any;
         try {
-          const parsed = JSON.parse(text);
+          parsed = JSON.parse(text);
           if (parsed.error?.message) message = parsed.error.message;
           else if (typeof parsed.error === "string") message = parsed.error;
         } catch {
           if (text) message = text;
         }
+
+        if (response.status === 402 && parsed?.error?.code === "QUOTA_EXCEEDED") {
+          throw new CyberLensQuotaExceededError(message, {
+            upgrade_url: parsed.error.upgrade_url,
+            quota_type: parsed.error.quota_type,
+            used: parsed.error.used,
+            limit: parsed.error.limit,
+          });
+        }
+
         throw new Error(message);
       }
 
@@ -174,17 +320,17 @@ export class CyberLensClient {
     estimated_duration: string;
   }> {
     const scanId = await this.startScan({
-      url: args.repo_url,
-      repo_url: args.repo_url,
-      branch: args.branch,
+      repo_url: args.repository_url,
+      target_type: "repository",
       depth: args.depth,
+      branch: args.branch,
     });
 
     return {
       scan_id: scanId,
-      url: args.repo_url,
+      url: args.repository_url,
       status: "pending",
-      estimated_duration: args.depth === "surface" ? "1-2 minutes" : "3-5 minutes",
+      estimated_duration: args.depth === "deep" ? "2-3 minutes" : "30-60 seconds",
     };
   }
 
@@ -216,32 +362,14 @@ export class CyberLensClient {
       data.website_url?.includes("convex.site") ||
       data.website_url?.includes("clawhub.ai");
 
-    let findings: Array<{
-      severity: string;
-      title: string;
-      description: string;
-      cwe?: string;
-      recommendation: string;
-    }> = [];
+    let findings = extractScanFindings(data);
 
-    if (data.vulnerabilities && Array.isArray(data.vulnerabilities)) {
-      findings = data.vulnerabilities
-        .filter((v: any) => !v.passed)
-        .map((v: any) => ({
-          severity: v.severity || "medium",
-          title: v.testId || "Unknown Issue",
-          description: v.details || v.message || "",
-          cwe: v.cwe,
-          recommendation: v.recommendation || "Review the finding and apply appropriate fixes.",
-        }));
-
-      if (severityFilter !== "all") {
-        const severityOrder = ["critical", "high", "medium", "low", "info"];
-        const minSeverityIndex = severityOrder.indexOf(severityFilter);
-        findings = findings.filter(
-          (f) => severityOrder.indexOf(f.severity) <= minSeverityIndex
-        );
-      }
+    if (severityFilter !== "all") {
+      const severityOrder = ["critical", "high", "medium", "low", "info"];
+      const minSeverityIndex = severityOrder.indexOf(severityFilter);
+      findings = findings.filter(
+        (finding) => severityOrder.indexOf(finding.severity) <= minSeverityIndex
+      );
     }
 
     return {
@@ -290,6 +418,12 @@ export class CyberLensClient {
     repo_scans_limit?: number;
     repo_scans_remaining?: number;
     legacy_combined?: boolean;
+    upgrade_recommended?: boolean;
+    upgrade_url?: string;
+    website_upgrade_required?: boolean;
+    website_upgrade_url?: string;
+    repo_upgrade_required?: boolean;
+    repo_upgrade_url?: string;
   }> {
     const result = await this.request("GET", "/quota");
     return {
@@ -304,6 +438,12 @@ export class CyberLensClient {
       repo_scans_limit: result.data.repo_scans_limit,
       repo_scans_remaining: result.data.repo_scans_remaining,
       legacy_combined: result.data.legacy_combined,
+      upgrade_recommended: result.data.upgrade_recommended,
+      upgrade_url: result.data.upgrade_url,
+      website_upgrade_required: result.data.website_upgrade_required,
+      website_upgrade_url: result.data.website_upgrade_url,
+      repo_upgrade_required: result.data.repo_upgrade_required,
+      repo_upgrade_url: result.data.repo_upgrade_url,
     };
   }
 }

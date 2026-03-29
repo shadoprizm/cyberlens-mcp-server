@@ -12,6 +12,7 @@ import { URL, URLSearchParams } from "node:url";
 import { exec } from "node:child_process";
 
 const CONNECT_BASE_URL = "https://cyberlensai.com/connect";
+const PRICING_BASE_URL = "https://www.cyberlensai.com/pricing";
 const TRUSTED_EXCHANGE_HOSTS = new Set([
   "cyberlensai.com",
   "www.cyberlensai.com",
@@ -88,6 +89,18 @@ function openBrowser(url: string): void {
         ? `start "" "${url}"`
         : `xdg-open "${url}"`;
   exec(cmd, () => {});
+}
+
+export function buildUpgradeUrl(quotaType: "website" | "repository" | "combined" = "combined"): string {
+  const url = new URL(PRICING_BASE_URL);
+  url.searchParams.set("source", "mcp-quota-exceeded");
+  url.searchParams.set("quota_type", quotaType);
+  url.hash = "plans";
+  return url.toString();
+}
+
+export function openUpgradePage(url: string): void {
+  openBrowser(url);
 }
 
 // ---- Port finding ----
