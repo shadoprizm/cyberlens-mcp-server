@@ -43,6 +43,9 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.23.0"
   },
+  "overrides": {
+    "@hono/node-server": "^1.19.15"
+  },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.5.0"
