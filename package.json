@@ -1,6 +1,6 @@
 {
   "name": "@shadoprizm/cyberlens-mcp-server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "mcpName": "io.github.shadoprizm/cyberlens-mcp-server",
   "description": "Cyber Lens AI MCP Server - Security scanning for AI assistants, with native Open CLAW skill support",
   "files": [
@@ -40,7 +40,7 @@
   "author": "Cyber Lens AI",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {

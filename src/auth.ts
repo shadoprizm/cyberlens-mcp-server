@@ -21,6 +21,7 @@ const TRUSTED_EXCHANGE_HOSTS = new Set([
 
 const CONFIG_DIR = join(homedir(), ".cyberlens", "mcp");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+const CONNECT_CLIENT = "cyberlens_mcp";
 
 // ---- Config file helpers ----
 
@@ -167,6 +168,15 @@ async function exchangeConnectCode(code: string, exchangeUrl: string): Promise<s
 
 // ---- Connect flow ----
 
+export function buildConnectUrl(callbackUrl: string, state: string): string {
+  const params = new URLSearchParams({
+    client: CONNECT_CLIENT,
+    callback: callbackUrl,
+    state,
+  });
+  return `${CONNECT_BASE_URL}?${params.toString()}`;
+}
+
 export async function runConnectFlow(): Promise<{
   api_key: string;
   config_path: string;
@@ -266,12 +276,7 @@ export async function runConnectFlow(): Promise<{
     }
 
     server.listen(port, "127.0.0.1", () => {
-      const params = new URLSearchParams({
-        client: "cyberlens_cli",
-        callback: callbackUrl,
-        state,
-      });
-      const connectUrl = `${CONNECT_BASE_URL}?${params.toString()}`;
+      const connectUrl = buildConnectUrl(callbackUrl, state);
 
       // Log to stderr so it doesn't interfere with MCP stdio
       console.error(`\nComplete CyberLens connection in your browser: ${connectUrl}\n`);

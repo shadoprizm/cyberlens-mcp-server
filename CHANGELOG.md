@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.1] - 2026-09-11
+
+### Fixed
+- Identify browser-based account connections as `cyberlens_mcp` so CyberLens can distinguish MCP-created accounts from CLI and OpenClaw signups.
+
 ## [1.0.0] - 2026-03-29
 
 ### Added
