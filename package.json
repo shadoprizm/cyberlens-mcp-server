@@ -19,10 +19,11 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "test": "node --test dist/**/*.test.js",
-    "lint": "eslint src/**/*.ts",
+    "test": "node --test dist/*.test.js",
+    "lint": "biome lint src --error-on-warnings",
+    "release:check": "npm run lint && npm run build && npm test && npm audit",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run lint && npm run build && npm test"
   },
   "keywords": [
     "mcp",
@@ -47,11 +48,12 @@
     "@hono/node-server": "^1.19.15"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.13",
     "@types/node": "^20.0.0",
     "typescript": "^5.5.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.18.0"
   },
   "repository": {
     "type": "git",
