@@ -4,7 +4,7 @@
 
 ### Fixed
 - Identify browser-based account connections as `cyberlens_mcp` so CyberLens can distinguish MCP-created accounts from CLI and OpenClaw signups.
-- Restore the declared lint gate and run it before package publication.
+- Restore the declared lint gate with Biome and run it before package publication.
 - Require Node 18.18 or newer, matching the supported dependency and build-tool baseline.
 
 ## [1.0.0] - 2026-03-29

@@ -20,7 +20,7 @@
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "test": "node --test dist/**/*.test.js",
-    "lint": "eslint src",
+    "lint": "biome lint src --error-on-warnings",
     "release:check": "npm run lint && npm run build && npm test && npm audit",
     "prepare": "npm run build",
     "prepublishOnly": "npm run lint && npm run build && npm test"
@@ -48,10 +48,9 @@
     "@hono/node-server": "^1.19.15"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.13",
     "@types/node": "^20.0.0",
-    "eslint": "9.39.5",
-    "typescript": "^5.5.0",
-    "typescript-eslint": "8.70.0"
+    "typescript": "^5.5.0"
   },
   "engines": {
     "node": ">=18.18.0"
