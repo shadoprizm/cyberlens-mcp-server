@@ -3,7 +3,7 @@
  * Downloads a skill zip, extracts it, analyzes the contents, and cleans up.
  */
 
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
@@ -121,16 +121,6 @@ const CODE_PATTERNS: Array<{
     description: "Skill references an external URL.",
     recommendation: "Review that external URLs are legitimate and necessary.",
   },
-];
-
-// Dangerous permission scopes in manifests
-const DANGEROUS_PERMISSIONS = [
-  { pattern: "fs:write", reason: "Can write arbitrary files" },
-  { pattern: "fs:delete", reason: "Can delete files" },
-  { pattern: "network:all", reason: "Unrestricted network access" },
-  { pattern: "exec:shell", reason: "Can execute shell commands" },
-  { pattern: "env:all", reason: "Can read all environment variables" },
-  { pattern: "env:write", reason: "Can modify environment variables" },
 ];
 
 function extractUrls(content: string): string[] {
