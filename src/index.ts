@@ -782,6 +782,9 @@ Scan ID: ${result.scan_id}
     }
   }
 
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(result.scan_id)) {
+    output += `\nFull report and PDF: https://www.cyberlensai.com/scan/${result.scan_id}\nSign in with the CyberLens account that owns this scan.\n`;
+  }
   return output;
 }
 
