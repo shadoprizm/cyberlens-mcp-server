@@ -1,0 +1,44 @@
+name: Publish npm package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Use an OIDC-capable npm CLI
+        run: npm install --global npm@latest
+
+      - run: npm ci
+      - run: npm run release:check
+
+      - name: Confirm this version is unpublished
+        shell: bash
+        run: |
+          package_name="$(node --print "require('./package.json').name")"
+          package_version="$(node --print "require('./package.json').version")"
+          if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
+            echo "${package_name}@${package_version} is already published" >&2
+            exit 1
+          fi
+
+      - name: Publish with npm trusted publishing
+        run: npm publish --access public
